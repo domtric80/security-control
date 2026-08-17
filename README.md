@@ -98,6 +98,16 @@ Le impostazioni principali sono configurabili tramite variabili ambiente nel `do
 - Upload PIR con estensioni/MIME allowlist e blocco esecuzione PHP lato Apache.
 - Export CSV/XLS protetti da formula injection.
 
+## Sicurezza GitHub
+
+Il repository include workflow GitHub Actions per:
+
+- lint sintattico dei file PHP;
+- validazione `docker compose config`;
+- build dell'immagine PHP/Apache;
+- analisi statica CodeQL per PHP;
+- aggiornamenti Dependabot per GitHub Actions e immagini Docker.
+
 ## Comandi utili
 
 ```bash

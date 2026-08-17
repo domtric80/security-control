@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Aggiunti workflow GitHub Actions per lint PHP, validazione Docker e CodeQL.
+- Aggiunta configurazione Dependabot per GitHub Actions e immagini Docker.
+
 ## v0.1.0 - 2026-08-17
 
 Prima release pubblica di Security Control.
