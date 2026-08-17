@@ -105,7 +105,8 @@ Il repository include workflow GitHub Actions per:
 - lint sintattico dei file PHP;
 - validazione `docker compose config`;
 - build dell'immagine PHP/Apache;
-- analisi statica CodeQL per PHP;
+- analisi statica CodeQL per workflow GitHub Actions;
+- analisi statica Semgrep per PHP, security audit e OWASP Top 10;
 - aggiornamenti Dependabot per GitHub Actions e immagini Docker.
 
 ## Comandi utili

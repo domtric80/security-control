@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Aggiunti workflow GitHub Actions per lint PHP, validazione Docker e CodeQL.
+- Aggiunti workflow GitHub Actions per lint PHP, validazione Docker, CodeQL e Semgrep.
 - Aggiunta configurazione Dependabot per GitHub Actions e immagini Docker.
 
 ## v0.1.0 - 2026-08-17

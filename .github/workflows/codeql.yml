@@ -1,4 +1,4 @@
-﻿name: CodeQL
+name: CodeQL Actions
 
 on:
   push:
@@ -18,14 +18,14 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze PHP
+    name: Analyze GitHub Actions
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
         language:
-          - php
+          - actions
 
     steps:
       - name: Checkout
@@ -35,7 +35,6 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          build-mode: none
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
