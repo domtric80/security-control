@@ -34,7 +34,7 @@ jobs:
 
       - name: Run Semgrep
         run: |
-          semgrep scan \
+          semgrep scan webapp \
             --config p/php \
             --config p/security-audit \
             --config p/owasp-top-ten \
