@@ -1,0 +1,104 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: requisiti-sec-app
+    environment:
+      REQ_DB_DRIVER: mysql
+      REQ_DB_HOST: db
+      REQ_DB_PORT: 3306
+      REQ_DB_NAME: requisiti
+      REQ_DB_USER: requisiti
+      REQ_DB_PASS: requisiti
+      REQ_APP_BASE_URL: ""
+      REQ_LEGACY_ADMIN_ENABLED: "false"
+      REQ_ADMIN_USER: ""
+      REQ_ADMIN_PASS: ""
+      REQ_LDAP_ENABLED: "false"
+      REQ_LDAP_URI: ""
+      REQ_LDAP_HOST: ""
+      REQ_LDAP_PORT: ""
+      REQ_LDAP_ENCRYPTION: "none"
+      REQ_LDAP_PROTOCOL_VERSION: "3"
+      REQ_LDAP_BASE_DN: ""
+      REQ_LDAP_BIND_DN: ""
+      REQ_LDAP_BIND_PASSWORD: ""
+      REQ_LDAP_USER_FILTER: "(sAMAccountName={username})"
+      REQ_LDAP_DEFAULT_ROLE: utente
+      REQ_OIDC_ENABLED: "false"
+      REQ_OIDC_ISSUER: ""
+      REQ_OIDC_CLIENT_ID: ""
+      REQ_OIDC_CLIENT_SECRET: ""
+      REQ_OIDC_REDIRECT_URI: ""
+      REQ_OIDC_DEFAULT_ROLE: utente
+      REQ_OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      REQ_OLLAMA_MODEL: ""
+      REQ_OLLAMA_TIMEOUT_SECONDS: "300"
+    ports:
+      - "127.0.0.1:8089:80"
+    volumes:
+      - ./webapp:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+      - ai-stack
+
+  db:
+    image: mysql:8.4
+    container_name: requisiti-sec-db
+    environment:
+      MYSQL_DATABASE: requisiti
+      MYSQL_USER: requisiti
+      MYSQL_PASSWORD: requisiti
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - requisiti_db_data:/var/lib/mysql
+      - ./webapp/database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./webapp/database/seed_domande.sql:/docker-entrypoint-initdb.d/02_seed_domande.sql:ro
+      - ./webapp/database/seed_business_lines.sql:/docker-entrypoint-initdb.d/03_seed_business_lines.sql:ro
+      - ./webapp/database/seed_requisiti.sql:/docker-entrypoint-initdb.d/04_seed_requisiti.sql:ro
+      - ./webapp/database/seed_servizi.sql:/docker-entrypoint-initdb.d/05_seed_servizi.sql:ro
+      - ./webapp/database/seed_regole.sql:/docker-entrypoint-initdb.d/06_seed_regole.sql:ro
+      - ./webapp/database/migrations/20260615_rbac.sql:/docker-entrypoint-initdb.d/07_rbac.sql:ro
+      - ./webapp/database/migrations/20260615_security_hardening.sql:/docker-entrypoint-initdb.d/08_security_hardening.sql:ro
+      - ./webapp/database/migrations/20260615_external_auth.sql:/docker-entrypoint-initdb.d/09_external_auth.sql:ro
+      - ./webapp/database/migrations/20260615_auth_settings.sql:/docker-entrypoint-initdb.d/10_auth_settings.sql:ro
+      - ./webapp/database/migrations/20260615_requirement_versioning.sql:/docker-entrypoint-initdb.d/11_requirement_versioning.sql:ro
+      - ./webapp/database/migrations/20260615_threat_analysis.sql:/docker-entrypoint-initdb.d/12_threat_analysis.sql:ro
+      - ./webapp/database/migrations/20260615_ai_providers.sql:/docker-entrypoint-initdb.d/13_ai_providers.sql:ro
+      - ./webapp/database/migrations/20260615_ai_assistant.sql:/docker-entrypoint-initdb.d/14_ai_assistant.sql:ro
+      - ./webapp/database/migrations/20260616_threat_analysis_sections.sql:/docker-entrypoint-initdb.d/15_threat_analysis_sections.sql:ro
+      - ./webapp/database/migrations/20260616_service_manual_overrides.sql:/docker-entrypoint-initdb.d/16_service_manual_overrides.sql:ro
+      - ./webapp/database/migrations/20260616_questionario_product_manager.sql:/docker-entrypoint-initdb.d/17_questionario_product_manager.sql:ro
+      - ./webapp/database/migrations/20260705_requirement_assignment_snapshots.sql:/docker-entrypoint-initdb.d/18_requirement_assignment_snapshots.sql:ro
+      - ./webapp/database/migrations/20260726_security_exceptions.sql:/docker-entrypoint-initdb.d/19_security_exceptions.sql:ro
+      - ./webapp/database/migrations/20260817_generalize_branding.sql:/docker-entrypoint-initdb.d/20_generalize_branding.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  adminer:
+    image: adminer:4
+    container_name: requisiti-sec-adminer
+    ports:
+      - "127.0.0.1:8090:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  requisiti_db_data:
+
+networks:
+  ai-stack:
+    external: true
+    name: ai-stack_default
+

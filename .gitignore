@@ -1,0 +1,34 @@
+# Local/private source material
+*.xlsx
+*.xls
+*.doc
+*.docx
+requisiti_data.json
+servizi_data.json
+requisiti_matrix.csv
+Catalogo+requisiti+sicurezza+per+progetti.doc
+Servizi_SEC_26_01_2026 - Share.xlsx
+Questionario v1.8.xlsx
+Selettore requisiti 20260422.xlsx
+
+# Local assistant/editor state
+.claude/
+.agents/
+.codex/
+.audit_extract/
+.idea/
+.vscode/
+gestione-pagamenti/
+
+# Runtime/generated data
+webapp/public/uploads/
+*.log
+*.tmp
+node_modules/
+vendor/
+webapp/database/*.bak
+
+# Environment/secrets
+.env
+.env.*
+!.env.example
