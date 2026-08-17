@@ -97,6 +97,8 @@ Le impostazioni principali sono configurabili tramite variabili ambiente nel `do
 - Tool manutentivi bloccati da web server e pensati per uso CLI.
 - Upload PIR con estensioni/MIME allowlist e blocco esecuzione PHP lato Apache.
 - Export CSV/XLS protetti da formula injection.
+- Output HTML della Threat Analysis sanitizzato con allowlist di tag e attributi.
+- Chiamate server-side verso provider IA limitate a host/reti configurati e senza redirect HTTP automatici.
 
 ## Sicurezza GitHub
 

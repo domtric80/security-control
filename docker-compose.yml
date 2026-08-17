@@ -78,6 +78,7 @@ services:
       - ./webapp/database/migrations/20260705_requirement_assignment_snapshots.sql:/docker-entrypoint-initdb.d/18_requirement_assignment_snapshots.sql:ro
       - ./webapp/database/migrations/20260726_security_exceptions.sql:/docker-entrypoint-initdb.d/19_security_exceptions.sql:ro
       - ./webapp/database/migrations/20260817_generalize_branding.sql:/docker-entrypoint-initdb.d/20_generalize_branding.sql:ro
+      - ./webapp/database/migrations/20260817_ai_provider_network_allowlist.sql:/docker-entrypoint-initdb.d/21_ai_provider_network_allowlist.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
       interval: 5s
@@ -101,4 +102,3 @@ networks:
   ai-stack:
     external: true
     name: ai-stack_default
-

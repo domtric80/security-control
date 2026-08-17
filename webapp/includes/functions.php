@@ -2650,6 +2650,8 @@ function ai_provider_default_row(): array {
         'default_model' => OLLAMA_MODEL,
         'model_list' => '',
         'timeout_seconds' => OLLAMA_TIMEOUT_SECONDS,
+        'allowed_hosts' => '',
+        'allowed_cidrs' => '',
         'enabled' => 1,
         'is_default' => 1,
     ];
@@ -2661,7 +2663,195 @@ function ai_provider_base_url(?array $provider = null): string {
     return rtrim($baseUrl !== '' ? $baseUrl : ollama_base_url(), '/');
 }
 
+function ensure_ai_provider_security_columns(): void {
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $done = true;
+    try {
+        $db = get_db();
+        $dbName = (string)$db->query('SELECT DATABASE()')->fetchColumn();
+        $st = $db->prepare(
+            "SELECT COLUMN_NAME
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ai_providers' AND COLUMN_NAME IN ('allowed_hosts', 'allowed_cidrs')"
+        );
+        $st->execute([$dbName]);
+        $existing = array_flip(array_map('strval', $st->fetchAll(PDO::FETCH_COLUMN)));
+        if (!isset($existing['allowed_hosts'])) {
+            $db->exec("ALTER TABLE ai_providers ADD COLUMN allowed_hosts TEXT NULL AFTER timeout_seconds");
+        }
+        if (!isset($existing['allowed_cidrs'])) {
+            $db->exec("ALTER TABLE ai_providers ADD COLUMN allowed_cidrs TEXT NULL AFTER allowed_hosts");
+        }
+    } catch (Throwable $e) {
+        // Best-effort per installazioni appena inizializzate o schema non ancora disponibile.
+    }
+}
+
+function ai_provider_split_list(string $raw): array {
+    $items = [];
+    foreach (preg_split('/[\r\n,;]+/', $raw) ?: [] as $item) {
+        $item = trim($item);
+        if ($item !== '') {
+            $items[$item] = $item;
+        }
+    }
+    return array_values($items);
+}
+
+function ai_provider_url_host(string $url): string {
+    $host = strtolower(trim((string)(parse_url($url, PHP_URL_HOST) ?: '')));
+    return trim($host, '[]');
+}
+
+function ai_provider_normalize_host(string $host): string {
+    $host = trim($host);
+    if (preg_match('/^https?:\/\//i', $host)) {
+        $host = ai_provider_url_host($host);
+    }
+    $host = strtolower($host);
+    return trim($host, "[] \t\n\r\0\x0B");
+}
+
+function ai_provider_allowed_hosts(array $provider): array {
+    $hosts = [];
+    $baseHost = ai_provider_url_host(ai_provider_base_url($provider));
+    if ($baseHost !== '') {
+        $hosts[$baseHost] = $baseHost;
+    }
+    foreach (ai_provider_split_list((string)($provider['allowed_hosts'] ?? '')) as $host) {
+        $host = ai_provider_normalize_host($host);
+        if ($host !== '') {
+            $hosts[$host] = $host;
+        }
+    }
+    return array_values($hosts);
+}
+
+function ai_provider_allowed_cidrs(array $provider): array {
+    return ai_provider_split_list((string)($provider['allowed_cidrs'] ?? ''));
+}
+
+function ai_provider_validate_cidr(string $cidr): bool {
+    $cidr = trim($cidr);
+    if (!str_contains($cidr, '/')) {
+        return filter_var($cidr, FILTER_VALIDATE_IP) !== false;
+    }
+    [$ip, $prefix] = array_pad(explode('/', $cidr, 2), 2, '');
+    if (filter_var($ip, FILTER_VALIDATE_IP) === false || !ctype_digit($prefix)) {
+        return false;
+    }
+    $max = str_contains($ip, ':') ? 128 : 32;
+    return (int)$prefix >= 0 && (int)$prefix <= $max;
+}
+
+function ai_provider_ip_in_cidr(string $ip, string $cidr): bool {
+    $cidr = trim($cidr);
+    if ($cidr === '') {
+        return false;
+    }
+    if (!str_contains($cidr, '/')) {
+        return strcasecmp($ip, $cidr) === 0;
+    }
+    [$network, $prefix] = array_pad(explode('/', $cidr, 2), 2, '');
+    $ipBin = @inet_pton($ip);
+    $networkBin = @inet_pton($network);
+    if ($ipBin === false || $networkBin === false || strlen($ipBin) !== strlen($networkBin) || !ctype_digit($prefix)) {
+        return false;
+    }
+    $prefixLength = (int)$prefix;
+    $maxBits = strlen($ipBin) * 8;
+    if ($prefixLength < 0 || $prefixLength > $maxBits) {
+        return false;
+    }
+    $fullBytes = intdiv($prefixLength, 8);
+    $remainingBits = $prefixLength % 8;
+    if ($fullBytes > 0 && substr($ipBin, 0, $fullBytes) !== substr($networkBin, 0, $fullBytes)) {
+        return false;
+    }
+    if ($remainingBits === 0) {
+        return true;
+    }
+    $mask = (0xFF << (8 - $remainingBits)) & 0xFF;
+    return (ord($ipBin[$fullBytes]) & $mask) === (ord($networkBin[$fullBytes]) & $mask);
+}
+
+function ai_provider_resolve_host_ips(string $host): array {
+    if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+        return [$host];
+    }
+    $ips = [];
+    foreach ((array)@gethostbynamel($host) as $ip) {
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            $ips[$ip] = $ip;
+        }
+    }
+    foreach ((array)@dns_get_record($host, DNS_AAAA) as $record) {
+        $ip = (string)($record['ipv6'] ?? '');
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+            $ips[$ip] = $ip;
+        }
+    }
+    return array_values($ips);
+}
+
+function ai_provider_validate_network_config(string $baseUrl, string $allowedHostsRaw, string $allowedCidrsRaw): array {
+    $parts = parse_url($baseUrl);
+    $scheme = strtolower((string)($parts['scheme'] ?? ''));
+    $host = ai_provider_url_host($baseUrl);
+    if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+        return ['ok' => false, 'message' => 'La Base URL IA deve essere un URL http/https valido.'];
+    }
+    if (!empty($parts['user']) || !empty($parts['pass'])) {
+        return ['ok' => false, 'message' => 'La Base URL IA non deve contenere credenziali. Usa il campo API key.'];
+    }
+    foreach (ai_provider_split_list($allowedHostsRaw) as $hostItem) {
+        $normalized = ai_provider_normalize_host($hostItem);
+        if ($normalized === '' || !preg_match('/^[a-z0-9._:-]+$/i', $normalized)) {
+            return ['ok' => false, 'message' => 'Host IA consentito non valido: ' . $hostItem];
+        }
+    }
+    foreach (ai_provider_split_list($allowedCidrsRaw) as $cidr) {
+        if (!ai_provider_validate_cidr($cidr)) {
+            return ['ok' => false, 'message' => 'CIDR/IP IA consentito non valido: ' . $cidr];
+        }
+    }
+    return ['ok' => true, 'message' => 'Configurazione rete IA valida.'];
+}
+
+function ai_provider_assert_url_allowed(array $provider, string $url): array {
+    $parts = parse_url($url);
+    $scheme = strtolower((string)($parts['scheme'] ?? ''));
+    $host = ai_provider_url_host($url);
+    if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+        return ['ok' => false, 'message' => 'Endpoint IA non valido.'];
+    }
+    if (!empty($parts['user']) || !empty($parts['pass'])) {
+        return ['ok' => false, 'message' => 'Endpoint IA con credenziali inline bloccato.'];
+    }
+    $allowedHosts = ai_provider_allowed_hosts($provider);
+    if (in_array($host, $allowedHosts, true)) {
+        return ['ok' => true, 'message' => 'Endpoint IA consentito per host configurato.'];
+    }
+    $allowedCidrs = ai_provider_allowed_cidrs($provider);
+    $ips = ai_provider_resolve_host_ips($host);
+    foreach ($ips as $ip) {
+        foreach ($allowedCidrs as $cidr) {
+            if (ai_provider_ip_in_cidr($ip, $cidr)) {
+                return ['ok' => true, 'message' => 'Endpoint IA consentito per rete configurata.'];
+            }
+        }
+    }
+    return [
+        'ok' => false,
+        'message' => 'Endpoint IA bloccato: host/rete non presenti nella allowlist del provider (' . $host . ').',
+    ];
+}
+
 function get_ai_providers(bool $onlyEnabled = false): array {
+    ensure_ai_provider_security_columns();
     try {
         $sql = "SELECT * FROM ai_providers";
         if ($onlyEnabled) {
@@ -2676,6 +2866,7 @@ function get_ai_providers(bool $onlyEnabled = false): array {
 }
 
 function get_ai_provider(int $id): array|false {
+    ensure_ai_provider_security_columns();
     if ($id <= 0) {
         return get_default_ai_provider();
     }
@@ -2690,6 +2881,7 @@ function get_ai_provider(int $id): array|false {
 }
 
 function get_default_ai_provider(): array {
+    ensure_ai_provider_security_columns();
     try {
         $row = get_db()->query("SELECT * FROM ai_providers WHERE enabled = 1 ORDER BY is_default DESC, id LIMIT 1")->fetch();
         return $row ?: ai_provider_default_row();
@@ -2772,6 +2964,8 @@ function save_ai_provider(array $data): array {
     $apiKey = (string)($data['api_key'] ?? '');
     $defaultModel = trim((string)($data['default_model'] ?? ''));
     $modelList = trim((string)($data['model_list'] ?? ''));
+    $allowedHosts = trim((string)($data['allowed_hosts'] ?? ''));
+    $allowedCidrs = trim((string)($data['allowed_cidrs'] ?? ''));
     $timeoutSeconds = max(30, min(1800, (int)($data['timeout_seconds'] ?? 300)));
     $enabled = isset($data['enabled']) ? 1 : 0;
     $isDefault = isset($data['is_default']) ? 1 : 0;
@@ -2785,7 +2979,12 @@ function save_ai_provider(array $data): array {
     if (!preg_match('/^https?:\/\//i', $baseUrl)) {
         return ['ok' => false, 'message' => 'La Base URL deve iniziare con http:// o https://.'];
     }
+    $networkValidation = ai_provider_validate_network_config($baseUrl, $allowedHosts, $allowedCidrs);
+    if (!$networkValidation['ok']) {
+        return $networkValidation;
+    }
 
+    ensure_ai_provider_security_columns();
     $db = get_db();
     $db->beginTransaction();
     try {
@@ -2802,14 +3001,14 @@ function save_ai_provider(array $data): array {
             }
             $db->prepare(
                 "UPDATE ai_providers
-                 SET nome=?, provider_type=?, base_url=?, api_key=?, default_model=?, model_list=?, timeout_seconds=?, enabled=?, is_default=?
+                 SET nome=?, provider_type=?, base_url=?, api_key=?, default_model=?, model_list=?, timeout_seconds=?, allowed_hosts=?, allowed_cidrs=?, enabled=?, is_default=?
                  WHERE id=?"
-            )->execute([$nome, $providerType, $baseUrl, $apiKey, $defaultModel, $modelList, $timeoutSeconds, $enabled, $isDefault, $id]);
+            )->execute([$nome, $providerType, $baseUrl, $apiKey, $defaultModel, $modelList, $timeoutSeconds, $allowedHosts, $allowedCidrs, $enabled, $isDefault, $id]);
         } else {
             $db->prepare(
-                "INSERT INTO ai_providers (nome, provider_type, base_url, api_key, default_model, model_list, timeout_seconds, enabled, is_default)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )->execute([$nome, $providerType, $baseUrl, $apiKey, $defaultModel, $modelList, $timeoutSeconds, $enabled, $isDefault]);
+                "INSERT INTO ai_providers (nome, provider_type, base_url, api_key, default_model, model_list, timeout_seconds, allowed_hosts, allowed_cidrs, enabled, is_default)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )->execute([$nome, $providerType, $baseUrl, $apiKey, $defaultModel, $modelList, $timeoutSeconds, $allowedHosts, $allowedCidrs, $enabled, $isDefault]);
         }
         if ($isDefault === 0 && (int)$db->query("SELECT COUNT(*) FROM ai_providers WHERE enabled = 1 AND is_default = 1")->fetchColumn() === 0) {
             $db->exec("UPDATE ai_providers SET is_default = 1 WHERE enabled = 1 ORDER BY id LIMIT 1");
@@ -2831,6 +3030,14 @@ function delete_ai_provider(int $id): array {
 }
 
 function test_ai_provider(array $provider): array {
+    $networkValidation = ai_provider_validate_network_config(ai_provider_base_url($provider), (string)($provider['allowed_hosts'] ?? ''), (string)($provider['allowed_cidrs'] ?? ''));
+    if (!$networkValidation['ok']) {
+        return $networkValidation;
+    }
+    $baseCheck = ai_provider_assert_url_allowed($provider, ai_provider_base_url($provider));
+    if (!$baseCheck['ok']) {
+        return $baseCheck;
+    }
     $type = (string)($provider['provider_type'] ?? 'ollama');
     if ($type === 'ollama') {
         $models = ollama_models($provider);
@@ -2857,7 +3064,11 @@ function test_ai_provider(array $provider): array {
     if ($apiKey !== '') {
         $headers .= "Authorization: Bearer $apiKey\r\n";
     }
-    $options = ['http' => ['method' => 'GET', 'header' => $headers, 'timeout' => 15, 'ignore_errors' => true]];
+    $access = ai_provider_assert_url_allowed($provider, $url);
+    if (!$access['ok']) {
+        return ['ok' => false, 'message' => $access['message']];
+    }
+    $options = ['http' => ['method' => 'GET', 'header' => $headers, 'timeout' => 15, 'ignore_errors' => true, 'max_redirects' => 0]];
     $body = @file_get_contents($url, false, stream_context_create($options));
     if ($body === false) {
         return ['ok' => false, 'message' => "Endpoint OpenAI-compatible non raggiungibile verso $url."];
@@ -2867,6 +3078,10 @@ function test_ai_provider(array $provider): array {
 
 function ollama_generation_probe(array $provider, string $model): array {
     $url = ai_provider_base_url($provider) . '/api/generate';
+    $access = ai_provider_assert_url_allowed($provider, $url);
+    if (!$access['ok']) {
+        return ['ok' => false, 'message' => $access['message'], 'seconds' => 0];
+    }
     $payload = [
         'model' => $model,
         'prompt' => 'Rispondi solo con OK.',
@@ -2884,6 +3099,7 @@ function ollama_generation_probe(array $provider, string $model): array {
         'content' => requisito_version_json($payload),
         'timeout' => 45,
         'ignore_errors' => true,
+        'max_redirects' => 0,
     ]]));
     if ($body === false) {
         return ['ok' => false, 'message' => "nessuna risposta da $url", 'seconds' => round(microtime(true) - $started, 2)];
@@ -2903,7 +3119,12 @@ function ollama_base_url(): string {
 }
 
 function ollama_http_request(string $method, string $path, ?array $payload = null, int $timeout = 30, ?array $provider = null): array {
-    $url = ai_provider_base_url($provider ?: ai_provider_default_row()) . $path;
+    $provider = $provider ?: ai_provider_default_row();
+    $url = ai_provider_base_url($provider) . $path;
+    $access = ai_provider_assert_url_allowed($provider, $url);
+    if (!$access['ok']) {
+        return ['ok' => false, 'status' => 0, 'error' => $access['message']];
+    }
     $headers = "Content-Type: application/json\r\nAccept: application/json\r\n";
     $options = [
         'http' => [
@@ -2911,6 +3132,7 @@ function ollama_http_request(string $method, string $path, ?array $payload = nul
             'header' => $headers,
             'timeout' => $timeout,
             'ignore_errors' => true,
+            'max_redirects' => 0,
         ],
     ];
     if ($payload !== null) {
@@ -2996,6 +3218,10 @@ function ollama_generate_stream(string $model, string $prompt, callable $onChunk
         ]
     ];
     $url = ai_provider_base_url($provider) . '/api/generate';
+    $access = ai_provider_assert_url_allowed($provider, $url);
+    if (!$access['ok']) {
+        return ['ok' => false, 'error' => $access['message'], 'response' => '', 'model' => $model];
+    }
     $options = [
         'http' => [
             'method' => 'POST',
@@ -3003,6 +3229,7 @@ function ollama_generate_stream(string $model, string $prompt, callable $onChunk
             'content' => requisito_version_json($payload),
             'timeout' => max(30, (int)($provider['timeout_seconds'] ?? OLLAMA_TIMEOUT_SECONDS)),
             'ignore_errors' => true,
+            'max_redirects' => 0,
         ],
     ];
     $handle = @fopen($url, 'r', false, stream_context_create($options));
@@ -3056,6 +3283,10 @@ function openai_compatible_generate(string $model, string $prompt, array $provid
         return ['ok' => false, 'error' => 'Seleziona o inserisci un modello IA.'];
     }
     $url = ai_provider_base_url($provider) . '/chat/completions';
+    $access = ai_provider_assert_url_allowed($provider, $url);
+    if (!$access['ok']) {
+        return ['ok' => false, 'error' => $access['message']];
+    }
     $headers = "Content-Type: application/json\r\nAccept: application/json\r\n";
     $apiKey = trim((string)($provider['api_key'] ?? ''));
     if ($apiKey !== '') {
@@ -3075,6 +3306,7 @@ function openai_compatible_generate(string $model, string $prompt, array $provid
         'content' => requisito_version_json($payload),
         'timeout' => max(30, (int)($provider['timeout_seconds'] ?? 300)),
         'ignore_errors' => true,
+        'max_redirects' => 0,
     ]];
     $body = @file_get_contents($url, false, stream_context_create($options));
     if ($body === false) {
@@ -3097,6 +3329,10 @@ function openai_compatible_generate_stream(string $model, string $prompt, callab
         return ['ok' => false, 'error' => 'Seleziona o inserisci un modello IA.', 'response' => '', 'model' => $model];
     }
     $url = ai_provider_base_url($provider) . '/chat/completions';
+    $access = ai_provider_assert_url_allowed($provider, $url);
+    if (!$access['ok']) {
+        return ['ok' => false, 'error' => $access['message'], 'response' => '', 'model' => $model];
+    }
     $headers = "Content-Type: application/json\r\nAccept: text/event-stream\r\n";
     $apiKey = trim((string)($provider['api_key'] ?? ''));
     if ($apiKey !== '') {
@@ -3116,6 +3352,7 @@ function openai_compatible_generate_stream(string $model, string $prompt, callab
         'content' => requisito_version_json($payload),
         'timeout' => max(30, (int)($provider['timeout_seconds'] ?? 300)),
         'ignore_errors' => true,
+        'max_redirects' => 0,
     ]]));
     if (!$handle) {
         return ['ok' => false, 'error' => "Connessione IA non riuscita verso $url.", 'response' => '', 'model' => $model];
@@ -3933,10 +4170,90 @@ function threat_analysis_markdown_to_html(string $markdown): string {
 }
 
 function threat_analysis_sanitize_html(string $html): string {
-    $html = strip_tags($html, '<p><br><strong><b><em><i><u><ul><ol><li><h2><h3><h4><blockquote><code><pre><table><thead><tbody><tr><th><td><a>');
-    $html = preg_replace('/\s+on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)/iu', '', $html) ?? $html;
-    $html = preg_replace('/href\s*=\s*([\'"])\s*javascript:[^\'"]*\1/iu', 'href="#"', $html) ?? $html;
-    return trim($html);
+    $html = trim($html);
+    if ($html === '') {
+        return '';
+    }
+    $html = preg_replace('/<\s*(script|style|iframe|object|embed|svg|math)\b[^>]*>.*?<\s*\/\s*\1\s*>/isu', '', $html) ?? $html;
+    $html = preg_replace('/<\s*(script|style|iframe|object|embed|svg|math|img)\b[^>]*\/?>/isu', '', $html) ?? $html;
+    if (!class_exists('DOMDocument')) {
+        $html = strip_tags($html, '<p><br><strong><b><em><i><u><ul><ol><li><h2><h3><h4><blockquote><code><pre><table><thead><tbody><tr><th><td><a>');
+        $html = preg_replace('/\s+(?!href=|title=|colspan=|rowspan=)[a-z0-9:-]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)/iu', '', $html) ?? $html;
+        $html = preg_replace('/href\s*=\s*([\'\"])\s*(?!https?:|mailto:|#)[^\'\"]*\1/iu', 'href="#"', $html) ?? $html;
+        return trim($html);
+    }
+
+    $allowedTags = array_flip(['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'h2', 'h3', 'h4', 'blockquote', 'code', 'pre', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a']);
+    $allowedAttrs = [
+        'a' => ['href', 'title'],
+        'td' => ['colspan', 'rowspan'],
+        'th' => ['colspan', 'rowspan'],
+    ];
+
+    $previous = libxml_use_internal_errors(true);
+    $doc = new DOMDocument('1.0', 'UTF-8');
+    $doc->loadHTML('<?xml encoding="UTF-8"><div id="threat-root">' . $html . '</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+    libxml_clear_errors();
+    libxml_use_internal_errors($previous);
+
+    $sanitizeNode = function (DOMNode $node) use (&$sanitizeNode, $allowedTags, $allowedAttrs): void {
+        if ($node instanceof DOMElement) {
+            $tag = strtolower($node->tagName);
+            if ($tag !== 'div' && !isset($allowedTags[$tag])) {
+                $parent = $node->parentNode;
+                if ($parent) {
+                    if (in_array($tag, ['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'img'], true)) {
+                        $parent->removeChild($node);
+                        return;
+                    }
+                    while ($node->firstChild) {
+                        $parent->insertBefore($node->firstChild, $node);
+                    }
+                    $parent->removeChild($node);
+                }
+                return;
+            }
+            if ($node->hasAttributes()) {
+                $remove = [];
+                foreach ($node->attributes as $attr) {
+                    $name = strtolower($attr->name);
+                    $value = trim($attr->value);
+                    $allowed = in_array($name, $allowedAttrs[$tag] ?? [], true);
+                    if (!$allowed) {
+                        $remove[] = $attr->name;
+                        continue;
+                    }
+                    if ($name === 'href' && !preg_match('/^(https?:\/\/|mailto:|#)/i', $value)) {
+                        $remove[] = $attr->name;
+                    }
+                    if (in_array($name, ['colspan', 'rowspan'], true) && !preg_match('/^[1-9][0-9]?$/', $value)) {
+                        $remove[] = $attr->name;
+                    }
+                }
+                foreach ($remove as $name) {
+                    $node->removeAttribute($name);
+                }
+            }
+            if ($tag === 'a' && $node->hasAttribute('href')) {
+                $node->setAttribute('rel', 'noopener noreferrer');
+                $node->setAttribute('target', '_blank');
+            }
+        }
+        foreach (iterator_to_array($node->childNodes) as $child) {
+            $sanitizeNode($child);
+        }
+    };
+
+    $root = $doc->getElementById('threat-root');
+    if (!$root) {
+        return '';
+    }
+    $sanitizeNode($root);
+    $output = '';
+    foreach ($root->childNodes as $child) {
+        $output .= $doc->saveHTML($child);
+    }
+    return trim($output);
 }
 
 function threat_analysis_html_to_text(string $html): string {
@@ -5763,5 +6080,3 @@ function extract_json_title(mixed $payload): string {
     }
     return "";
 }
-
-

@@ -1,0 +1,21 @@
+rules:
+  - id: php.output-without-approved-escaping
+    mode: taint
+    languages:
+      - php
+    severity: WARNING
+    message: Output derivato da input utente senza escaping applicativo approvato.
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+    pattern-sinks:
+      - pattern: echo $SINK;
+      - pattern: print $SINK;
+    pattern-sanitizers:
+      - pattern: h(...)
+      - pattern: htmlspecialchars(...)
+      - pattern: htmlentities(...)
+      - pattern: requisito_version_json(...)
+      - pattern: threat_analysis_sanitize_html(...)

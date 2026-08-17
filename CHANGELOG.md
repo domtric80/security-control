@@ -4,6 +4,8 @@
 
 - Aggiunti workflow GitHub Actions per lint PHP, validazione Docker, CodeQL e Semgrep.
 - Aggiunta configurazione Dependabot per GitHub Actions e immagini Docker.
+- Rafforzata la sanitizzazione HTML della Threat Analysis generata da IA.
+- Aggiunta allowlist host/CIDR per limitare le chiamate server-side verso provider IA configurati.
 
 ## v0.1.0 - 2026-08-17
 

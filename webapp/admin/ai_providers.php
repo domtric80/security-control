@@ -50,6 +50,7 @@ require __DIR__ . '/../includes/header.php';
   <strong>Endpoint Docker:</strong> il browser non chiama direttamente l'IA. La richiesta parte dal container PHP.
   Se Ollama espone la porta sul PC host, <code>http://host.docker.internal:11434</code> è corretto dal container.
   Se app e Ollama sono nella stessa rete Docker, puoi usare il nome servizio, ad esempio <code>http://ollama:11434</code>.
+  Le chiamate server-side vengono consentite solo verso l'host della Base URL e verso eventuali host/reti aggiuntivi configurati sotto.
 </div>
 
 <div class="row g-4">
@@ -93,6 +94,16 @@ require __DIR__ . '/../includes/header.php';
             <label class="form-label">Modelli configurati</label>
             <textarea class="form-control font-monospace" name="model_list" rows="5" placeholder="Un modello per riga, oppure separati da virgola" <?= ($edit ? $canUpdate : $canCreate) ? '' : 'disabled' ?>><?= h($edit['model_list'] ?? '') ?></textarea>
             <div class="form-text">Per Ollama la lista viene integrata con i modelli letti da <code>/api/tags</code>.</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Host IA consentiti</label>
+            <textarea class="form-control font-monospace" name="allowed_hosts" rows="4" placeholder="Uno per riga, es. ollama, host.docker.internal, api.openai.com" <?= ($edit ? $canUpdate : $canCreate) ? '' : 'disabled' ?>><?= h($edit['allowed_hosts'] ?? '') ?></textarea>
+            <div class="form-text">L'host della Base URL è sempre consentito automaticamente. Inserisci qui solo host aggiuntivi ammessi.</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">CIDR/IP IA consentiti</label>
+            <textarea class="form-control font-monospace" name="allowed_cidrs" rows="4" placeholder="Uno per riga, es. 172.18.0.0/16, 127.0.0.1/32" <?= ($edit ? $canUpdate : $canCreate) ? '' : 'disabled' ?>><?= h($edit['allowed_cidrs'] ?? '') ?></textarea>
+            <div class="form-text">Usa questo campo solo se vuoi autorizzare una rete specifica. I redirect HTTP verso host non consentiti sono bloccati.</div>
           </div>
           <div class="col-md-6 form-check ms-2">
             <input class="form-check-input" type="checkbox" name="enabled" id="enabled" value="1" <?= (int)($edit['enabled'] ?? 1) === 1 ? 'checked' : '' ?> <?= ($edit ? $canUpdate : $canCreate) ? '' : 'disabled' ?>>

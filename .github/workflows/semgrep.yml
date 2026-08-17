@@ -38,6 +38,8 @@ jobs:
             --config p/php \
             --config p/security-audit \
             --config p/owasp-top-ten \
+            --config .semgrep.yml \
+            --exclude-rule php.lang.security.injection.echoed-request.echoed-request \
             --sarif \
             --output semgrep.sarif \
             --metrics=off \

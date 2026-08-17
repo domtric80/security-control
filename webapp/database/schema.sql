@@ -559,6 +559,8 @@ CREATE TABLE IF NOT EXISTS ai_providers (
     default_model   VARCHAR(200) NOT NULL DEFAULT '',
     model_list      TEXT NULL,
     timeout_seconds INT NOT NULL DEFAULT 300,
+    allowed_hosts   TEXT NULL,
+    allowed_cidrs   TEXT NULL,
     enabled         TINYINT(1) NOT NULL DEFAULT 1,
     is_default      TINYINT(1) NOT NULL DEFAULT 0,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -610,4 +612,3 @@ CREATE TABLE IF NOT EXISTS ai_suggestions (
     KEY idx_ai_suggestions_questionario (questionario_id, suggestion_type, status),
     KEY idx_ai_suggestions_run (run_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
