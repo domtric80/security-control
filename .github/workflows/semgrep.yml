@@ -22,15 +22,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
       - name: Install Semgrep
-        run: python -m pip install --upgrade semgrep
+        run: python -m pip install --disable-pip-version-check "semgrep==1.174.0"
 
       - name: Run Semgrep
         run: |
@@ -38,15 +38,17 @@ jobs:
             --config p/php \
             --config p/security-audit \
             --config p/owasp-top-ten \
+            --config p/secrets \
             --exclude-rule php.lang.security.injection.echoed-request.echoed-request \
             --sarif \
             --output semgrep.sarif \
             --metrics=off \
+            --error \
             --exclude webapp/public/uploads \
             --exclude .git
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         if: always()
         with:
           sarif_file: semgrep.sarif
