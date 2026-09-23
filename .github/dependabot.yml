@@ -30,3 +30,16 @@ updates:
     labels:
       - dependencies
       - docker
+
+  - package-ecosystem: docker-compose
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Rome
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - docker

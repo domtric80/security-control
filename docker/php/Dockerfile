@@ -1,6 +1,7 @@
 FROM php:8.3-apache
 
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends libldap2-dev libzip-dev \
     && rm -rf /var/lib/apt/lists/*
 
